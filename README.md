@@ -1,5 +1,4 @@
 # Conformer-MSCRED
-Change ConvLSTM to Conformer in MSCRED for improved reconstruction
 ![Conformer-MSCRED Framework](https://github.com/JLake310/Conformer-MSCRED/assets/86578246/3c4b6e43-e4e9-4296-8dcc-6ecf710dd0f1)
 
 
