@@ -12,13 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import torch
 import torch.nn as nn
 from torch import Tensor
 from typing import Tuple
 
 from .feed_forward import FeedForwardModule
-from .attention import MultiHeadedSelfAttentionModule
+from .attention import AttentionModule
 from .convolution import (
     ConformerConvModule,
     Conv2dSubampling,
@@ -38,6 +37,7 @@ class ConformerBlock(nn.Module):
 
     Args:
         encoder_dim (int, optional): Dimension of conformer encoder
+        conv_channels (int, optional): Dimension of convolution channel of conformer encoder
         num_attention_heads (int, optional): Number of attention heads
         feed_forward_expansion_factor (int, optional): Expansion factor of feed forward module
         conv_expansion_factor (int, optional): Expansion factor of conformer convolution module
@@ -48,22 +48,24 @@ class ConformerBlock(nn.Module):
         half_step_residual (bool): Flag indication whether to use half step residual or not
 
     Inputs: inputs
-        - **inputs** (batch, time, dim): Tensor containing input vector
+        - **inputs** (batch, seq_len, num_channels, height, width): Tensor containing input vector
 
     Returns: outputs
-        - **outputs** (batch, time, dim): Tensor produces by conformer block.
+        - **outputs** (batch, seq_len, num_channels, height, width): Tensor produces by conformer block.
     """
+
     def __init__(
-            self,
-            encoder_dim: int = 512,
-            num_attention_heads: int = 8,
-            feed_forward_expansion_factor: int = 4,
-            conv_expansion_factor: int = 2,
-            feed_forward_dropout_p: float = 0.1,
-            attention_dropout_p: float = 0.1,
-            conv_dropout_p: float = 0.1,
-            conv_kernel_size: int = 31,
-            half_step_residual: bool = True,
+        self,
+        encoder_dim: int = 512,
+        conv_channels: int = 5,
+        num_attention_heads: int = 8,
+        feed_forward_expansion_factor: int = 1,
+        conv_expansion_factor: int = 2,
+        feed_forward_dropout_p: float = 0.1,
+        attention_dropout_p: float = 0.1,
+        conv_dropout_p: float = 0.1,
+        conv_kernel_size: int = 31,
+        half_step_residual: bool = True,
     ):
         super(ConformerBlock, self).__init__()
         if half_step_residual:
@@ -81,19 +83,17 @@ class ConformerBlock(nn.Module):
                 module_factor=self.feed_forward_residual_factor,
             ),
             ResidualConnectionModule(
-                module=MultiHeadedSelfAttentionModule(
+                module=AttentionModule(
                     d_model=encoder_dim,
-                    num_heads=num_attention_heads,
                     dropout_p=attention_dropout_p,
                 ),
             ),
-            ResidualConnectionModule(
-                module=ConformerConvModule(
-                    in_channels=encoder_dim,
-                    kernel_size=conv_kernel_size,
-                    expansion_factor=conv_expansion_factor,
-                    dropout_p=conv_dropout_p,
-                ),
+            ConformerConvModule(
+                in_channels=encoder_dim,
+                conv_channels=conv_channels,
+                kernel_size=conv_kernel_size,
+                expansion_factor=conv_expansion_factor,
+                dropout_p=conv_dropout_p,
             ),
             ResidualConnectionModule(
                 module=FeedForwardModule(
@@ -105,19 +105,34 @@ class ConformerBlock(nn.Module):
             ),
             nn.LayerNorm(encoder_dim),
         )
+        self.ff1 = ResidualConnectionModule(
+            module=FeedForwardModule(
+                encoder_dim=encoder_dim,
+                expansion_factor=feed_forward_expansion_factor,
+                dropout_p=feed_forward_dropout_p,
+            ),
+            module_factor=self.feed_forward_residual_factor,
+        )
+
+        self.conformer_conv = ConformerConvModule(
+            in_channels=encoder_dim,
+            conv_channels=conv_channels,
+            kernel_size=conv_kernel_size,
+            expansion_factor=conv_expansion_factor,
+            dropout_p=conv_dropout_p,
+        )
 
     def forward(self, inputs: Tensor) -> Tensor:
-        return self.sequential(inputs)
+        x = self.sequential(inputs)
+        return x
 
 
 class ConformerEncoder(nn.Module):
     """
-    Conformer encoder first processes the input with a convolution subsampling layer and then
-    with a number of conformer blocks.
-
     Args:
         input_dim (int, optional): Dimension of input vector
         encoder_dim (int, optional): Dimension of conformer encoder
+        conv_channels (int, optional): Dimension of convolution channel of conformer encoder
         num_layers (int, optional): Number of conformer blocks
         num_attention_heads (int, optional): Number of attention heads
         feed_forward_expansion_factor (int, optional): Expansion factor of feed forward module
@@ -128,58 +143,65 @@ class ConformerEncoder(nn.Module):
         conv_kernel_size (int or tuple, optional): Size of the convolving kernel
         half_step_residual (bool): Flag indication whether to use half step residual or not
 
-    Inputs: inputs, input_lengths
-        - **inputs** (batch, time, dim): Tensor containing input vector
-        - **input_lengths** (batch): list of sequence input lengths
+    Inputs: inputs
+        - **inputs** (batch, seq_len, num_channels, height, width): Tensor containing input vector
 
-    Returns: outputs, output_lengths
-        - **outputs** (batch, out_channels, time): Tensor produces by conformer encoder.
-        - **output_lengths** (batch): list of sequence output lengths
+    Returns: outputs
+        - **outputs** (batch, num_channels, height, width): Tensor produces by conformer encoder.
     """
+
     def __init__(
-            self,
-            input_dim: int = 80,
-            encoder_dim: int = 512,
-            num_layers: int = 17,
-            num_attention_heads: int = 8,
-            feed_forward_expansion_factor: int = 4,
-            conv_expansion_factor: int = 2,
-            input_dropout_p: float = 0.1,
-            feed_forward_dropout_p: float = 0.1,
-            attention_dropout_p: float = 0.1,
-            conv_dropout_p: float = 0.1,
-            conv_kernel_size: int = 31,
-            half_step_residual: bool = True,
+        self,
+        input_dim: int = 80,
+        conv_channels: int = 5,
+        encoder_dim: int = 512,
+        num_layers: int = 17,
+        num_attention_heads: int = 8,
+        feed_forward_expansion_factor: int = 4,
+        conv_expansion_factor: int = 2,
+        input_dropout_p: float = 0.1,
+        feed_forward_dropout_p: float = 0.1,
+        attention_dropout_p: float = 0.1,
+        conv_dropout_p: float = 0.1,
+        conv_kernel_size: int = 31,
+        half_step_residual: bool = True,
     ):
         super(ConformerEncoder, self).__init__()
         self.conv_subsample = Conv2dSubampling(in_channels=1, out_channels=encoder_dim)
         self.input_projection = nn.Sequential(
-            Linear(encoder_dim * (((input_dim - 1) // 2 - 1) // 2), encoder_dim),
+            # Linear(encoder_dim * (((input_dim - 1) // 2 - 1) // 2), encoder_dim),
+            Linear(input_dim, encoder_dim),
             nn.Dropout(p=input_dropout_p),
         )
-        self.layers = nn.ModuleList([ConformerBlock(
-            encoder_dim=encoder_dim,
-            num_attention_heads=num_attention_heads,
-            feed_forward_expansion_factor=feed_forward_expansion_factor,
-            conv_expansion_factor=conv_expansion_factor,
-            feed_forward_dropout_p=feed_forward_dropout_p,
-            attention_dropout_p=attention_dropout_p,
-            conv_dropout_p=conv_dropout_p,
-            conv_kernel_size=conv_kernel_size,
-            half_step_residual=half_step_residual,
-        ) for _ in range(num_layers)])
+        self.layers = nn.ModuleList(
+            [
+                ConformerBlock(
+                    encoder_dim=encoder_dim,
+                    num_attention_heads=num_attention_heads,
+                    feed_forward_expansion_factor=feed_forward_expansion_factor,
+                    conv_expansion_factor=conv_expansion_factor,
+                    feed_forward_dropout_p=feed_forward_dropout_p,
+                    attention_dropout_p=attention_dropout_p,
+                    conv_dropout_p=conv_dropout_p,
+                    conv_kernel_size=conv_kernel_size,
+                    half_step_residual=half_step_residual,
+                    conv_channels=conv_channels,
+                )
+                for _ in range(num_layers)
+            ]
+        )
 
     def count_parameters(self) -> int:
-        """ Count parameters of encoder """
+        """Count parameters of encoder"""
         return sum([p.numel() for p in self.parameters()])
 
     def update_dropout(self, dropout_p: float) -> None:
-        """ Update dropout probability of encoder """
+        """Update dropout probability of encoder"""
         for name, child in self.named_children():
             if isinstance(child, nn.Dropout):
                 child.p = dropout_p
 
-    def forward(self, inputs: Tensor, input_lengths: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, inputs: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Forward propagate a `inputs` for  encoder training.
 
@@ -195,10 +217,12 @@ class ConformerEncoder(nn.Module):
                 ``(batch, seq_length, dimension)``
             * output_lengths (torch.LongTensor): The length of output tensor. ``(batch)``
         """
-        outputs, output_lengths = self.conv_subsample(inputs, input_lengths)
-        outputs = self.input_projection(outputs)
+        # outputs, output_lengths = self.conv_subsample(inputs, input_lengths)
+        # outputs = self.input_projection(outputs)
+        # outputs = self.input_projection(inputs)
 
         for layer in self.layers:
-            outputs = layer(outputs)
+            outputs = layer(inputs)
 
-        return outputs, output_lengths
+        # return outputs, output_lengths
+        return outputs
