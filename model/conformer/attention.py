@@ -43,11 +43,12 @@ class RelativeMultiHeadAttention(nn.Module):
     Returns:
         - **outputs**: Tensor produces by relative multi head attention module.
     """
+
     def __init__(
-            self,
-            d_model: int = 512,
-            num_heads: int = 16,
-            dropout_p: float = 0.1,
+        self,
+        d_model: int = 512,
+        num_heads: int = 16,
+        dropout_p: float = 0.1,
     ):
         super(RelativeMultiHeadAttention, self).__init__()
         assert d_model % num_heads == 0, "d_model % num_heads should be zero."
@@ -70,25 +71,40 @@ class RelativeMultiHeadAttention(nn.Module):
         self.out_proj = Linear(d_model, d_model)
 
     def forward(
-            self,
-            query: Tensor,
-            key: Tensor,
-            value: Tensor,
-            pos_embedding: Tensor,
-            mask: Optional[Tensor] = None,
+        self,
+        query: Tensor,
+        key: Tensor,
+        value: Tensor,
+        pos_embedding: Tensor,
+        mask: Optional[Tensor] = None,
     ) -> Tensor:
         batch_size = value.size(0)
 
         query = self.query_proj(query).view(batch_size, -1, self.num_heads, self.d_head)
-        key = self.key_proj(key).view(batch_size, -1, self.num_heads, self.d_head).permute(0, 2, 1, 3)
-        value = self.value_proj(value).view(batch_size, -1, self.num_heads, self.d_head).permute(0, 2, 1, 3)
-        pos_embedding = self.pos_proj(pos_embedding).view(batch_size, -1, self.num_heads, self.d_head)
+        key = (
+            self.key_proj(key)
+            .view(batch_size, -1, self.num_heads, self.d_head)
+            .permute(0, 2, 1, 3)
+        )
+        value = (
+            self.value_proj(value)
+            .view(batch_size, -1, self.num_heads, self.d_head)
+            .permute(0, 2, 1, 3)
+        )
+        pos_embedding = self.pos_proj(pos_embedding).view(
+            batch_size, -1, self.num_heads, self.d_head
+        )
 
-        content_score = torch.matmul((query + self.u_bias).transpose(1, 2), key.transpose(2, 3))
-        pos_score = torch.matmul((query + self.v_bias).transpose(1, 2), pos_embedding.permute(0, 2, 3, 1))
+        content_score = torch.matmul(
+            (query + self.u_bias).transpose(1, 2), key.transpose(2, 3)
+        )
+        pos_score = torch.matmul(
+            (query + self.v_bias).transpose(1, 2), pos_embedding.permute(0, 2, 3, 1)
+        )
         pos_score = self._relative_shift(pos_score)
 
-        score = (content_score + pos_score) / self.sqrt_dim
+        # score = (content_score + pos_score) / self.sqrt_dim
+        score = (content_score) / self.sqrt_dim
 
         if mask is not None:
             mask = mask.unsqueeze(1)
@@ -107,10 +123,33 @@ class RelativeMultiHeadAttention(nn.Module):
         zeros = pos_score.new_zeros(batch_size, num_heads, seq_length1, 1)
         padded_pos_score = torch.cat([zeros, pos_score], dim=-1)
 
-        padded_pos_score = padded_pos_score.view(batch_size, num_heads, seq_length2 + 1, seq_length1)
+        padded_pos_score = padded_pos_score.view(
+            batch_size, num_heads, seq_length2 + 1, seq_length1
+        )
         pos_score = padded_pos_score[:, :, 1:].view_as(pos_score)
 
         return pos_score
+
+
+class AttentionModule(nn.Module):
+    def __init__(self, d_model: int, dropout_p: float = 0.1):
+        super(AttentionModule, self).__init__()
+        self.query_proj = Linear(d_model, d_model)
+        self.key_proj = Linear(d_model, d_model)
+        self.value_proj = Linear(d_model, d_model)
+        self.dropout = nn.Dropout(p=dropout_p)
+
+    def forward(self, inputs: Tensor):
+        query = self.query_proj(inputs)
+        key = self.key_proj(inputs)
+        value = self.value_proj(inputs)
+        similarity = torch.einsum("abcde,abcde->abcde", query, key)
+
+        attention_weights = torch.softmax(similarity, dim=-1)
+
+        attention_result = torch.einsum("abcde,abcde->abcde", attention_weights, value)
+
+        return self.dropout(attention_result)
 
 
 class MultiHeadedSelfAttentionModule(nn.Module):
@@ -133,6 +172,7 @@ class MultiHeadedSelfAttentionModule(nn.Module):
     Returns:
         - **outputs** (batch, time, dim): Tensor produces by relative multi headed self attention module.
     """
+
     def __init__(self, d_model: int, num_heads: int, dropout_p: float = 0.1):
         super(MultiHeadedSelfAttentionModule, self).__init__()
         self.positional_encoding = PositionalEncoding(d_model)
@@ -141,11 +181,13 @@ class MultiHeadedSelfAttentionModule(nn.Module):
         self.dropout = nn.Dropout(p=dropout_p)
 
     def forward(self, inputs: Tensor, mask: Optional[Tensor] = None):
-        batch_size, seq_length, _ = inputs.size()
+        batch_size, seq_length, _, _, _ = inputs.size()
         pos_embedding = self.positional_encoding(seq_length)
         pos_embedding = pos_embedding.repeat(batch_size, 1, 1)
 
         inputs = self.layer_norm(inputs)
-        outputs = self.attention(inputs, inputs, inputs, pos_embedding=pos_embedding, mask=mask)
+        outputs = self.attention(
+            inputs, inputs, inputs, pos_embedding=pos_embedding, mask=mask
+        )
 
         return self.dropout(outputs)

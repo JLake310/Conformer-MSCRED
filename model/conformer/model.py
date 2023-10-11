@@ -49,21 +49,23 @@ class Conformer(nn.Module):
         - **outputs** (batch, out_channels, time): Tensor produces by conformer.
         - **output_lengths** (batch): list of sequence output lengths
     """
+
     def __init__(
-            self,
-            num_classes: int,
-            input_dim: int = 80,
-            encoder_dim: int = 512,
-            num_encoder_layers: int = 17,
-            num_attention_heads: int = 8,
-            feed_forward_expansion_factor: int = 4,
-            conv_expansion_factor: int = 2,
-            input_dropout_p: float = 0.1,
-            feed_forward_dropout_p: float = 0.1,
-            attention_dropout_p: float = 0.1,
-            conv_dropout_p: float = 0.1,
-            conv_kernel_size: int = 31,
-            half_step_residual: bool = True,
+        self,
+        num_classes: int = 10,
+        input_dim: int = 80,
+        encoder_dim: int = 512,
+        num_encoder_layers: int = 17,
+        num_attention_heads: int = 8,
+        feed_forward_expansion_factor: int = 4,
+        conv_expansion_factor: int = 2,
+        input_dropout_p: float = 0.1,
+        feed_forward_dropout_p: float = 0.1,
+        attention_dropout_p: float = 0.1,
+        conv_dropout_p: float = 0.1,
+        conv_kernel_size: int = 31,
+        half_step_residual: bool = True,
+        conv_channels: int = 5,
     ) -> None:
         super(Conformer, self).__init__()
         self.encoder = ConformerEncoder(
@@ -79,18 +81,19 @@ class Conformer(nn.Module):
             conv_dropout_p=conv_dropout_p,
             conv_kernel_size=conv_kernel_size,
             half_step_residual=half_step_residual,
+            conv_channels=conv_channels,
         )
-        self.fc = Linear(encoder_dim, num_classes, bias=False)
+        # self.fc = Linear(encoder_dim, num_classes, bias=False)
 
     def count_parameters(self) -> int:
-        """ Count parameters of encoder """
+        """Count parameters of encoder"""
         return self.encoder.count_parameters()
 
     def update_dropout(self, dropout_p) -> None:
-        """ Update dropout probability of model """
+        """Update dropout probability of model"""
         self.encoder.update_dropout(dropout_p)
 
-    def forward(self, inputs: Tensor, input_lengths: Tensor) -> Tuple[Tensor, Tensor]:
+    def forward(self, inputs: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Forward propagate a `inputs` and `targets` pair for training.
 
@@ -102,7 +105,8 @@ class Conformer(nn.Module):
         Returns:
             * predictions (torch.FloatTensor): Result of model predictions.
         """
-        encoder_outputs, encoder_output_lengths = self.encoder(inputs, input_lengths)
-        outputs = self.fc(encoder_outputs)
-        outputs = nn.functional.log_softmax(outputs, dim=-1)
-        return outputs, encoder_output_lengths
+        encoder_outputs = self.encoder(inputs)
+        return encoder_outputs
+        # outputs = self.fc(encoder_outputs)
+        # outputs = nn.functional.log_softmax(outputs, dim=-1)
+        # return outputs, encoder_output_lengths
