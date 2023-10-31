@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from conformer.model import Conformer
+from model.conformer.model import Conformer
 
 
 class ConformerMSCRED(nn.Module):
